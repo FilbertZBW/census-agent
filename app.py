@@ -52,11 +52,18 @@ st.caption(
 with st.sidebar:
     st.header("About")
     st.markdown(
-        "- Natural language -> Snowflake SQL -> grounded answer\n"
-        "- Answers come only from US Census data; off-topic questions are "
-        "politely refused\n"
-        "- Self-healing SQL retry + graceful degradation\n"
-        "- Multi-turn: ask follow-ups like *\"what about Texas?\"*"
+        "This assistant answers questions about **US population & "
+        "demographics**, using 2019 US Census (American Community Survey) "
+        "data on Snowflake.\n\n"
+        "**Try asking:**\n"
+        "- Population of a state or county\n"
+        "- Median household income / per-capita income\n"
+        "- Housing, age, race, or food-stamp share\n\n"
+        "**Good to know:**\n"
+        "- Answers come only from Census data; off-topic questions are "
+        "politely declined\n"
+        "- Data is at state / county level (2019)\n"
+        "- Ask follow-ups like *\"what about Texas?\"*"
     )
     if st.button("🗑️ Clear conversation"):
         st.session_state.messages = []
