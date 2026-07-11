@@ -36,6 +36,17 @@ The pipeline has three layers:
 - Census-block-group granularity, keyed by a 12-character FIPS string `CENSUS_BLOCK_GROUP`
 - 364 data tables; the metadata table `2019_METADATA_CBG_FIELD_DESCRIPTIONS` drives the dynamic grounding
 
+## Assumptions & interpretations
+
+The assignment intentionally leaves decisions open, so here are the judgment
+calls I made:
+
+- *Dataset:* used the Snowflake Marketplace **US Open Census** dataset (2019 American Community Survey, `US_OPEN_CENSUS.PUBLIC`) as the single source of truth. All figures are 2019 ACS estimates.
+- *Granularity:* the finest grain is the census block group; I aggregate up to county and state via FIPS codes. City / place-level questions are therefore out of scope.
+- *Exact vs approximate:* sums and counts are exact. Medians cannot be aggregated exactly across block groups, so I report a universe-weighted approximation labeled `APPROXIMATE_...`; per-capita income is recovered exactly as a population-weighted average.
+- *Guardrail scope:* "on-topic" means US population / demographics answerable from this dataset; everything else (non-US geographies, weather, general knowledge, prompt-injection) is politely refused.
+- *Access:* the demo is a public URL with no login required, so no credentials are needed to evaluate it.
+
 ## Tech stack
 
 - Python 3.12
