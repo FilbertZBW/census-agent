@@ -17,7 +17,7 @@ load_dotenv()
 # a genuinely lightweight, low-latency model; the schema prompt does the heavy
 # lifting so SQL quality stays high while every call is fast and consistent.
 # Fallback for max SQL quality: "gemini-3-flash-preview".
-MODEL = "gemini-flash-lite-latest"
+MODEL = "gemini-3.1-flash-lite"
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
@@ -31,9 +31,7 @@ def _build_config():
     if types is None:
         return None
     try:
-        return types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=0)
-        )
+        return types.GenerateContentConfig()
     except Exception:
         return None
 
