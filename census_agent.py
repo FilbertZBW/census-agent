@@ -40,10 +40,10 @@ column name contains "APPROXIMATE", make clear the figure is an approximation
 on 2019 American Community Survey (US Census) data."""
 
 
-def synthesize_answer(question, sql, cols, rows) -> str:
+def synthesize_answer(question, sql, cols, rows, llm=None) -> str:
     prompt = ANSWER_PROMPT.format(question=question, sql=sql, cols=cols,
                                   rows=rows[:50])
-    return gemini_generate(prompt).strip()
+    return gemini_generate(prompt, llm=llm).strip()
 
 
 REFUSAL = (
@@ -75,18 +75,19 @@ Last message: {question}
 Standalone question:"""
 
 
-def resolve_followup(question: str, history: list) -> str:
+def resolve_followup(question: str, history: list, llm=None) -> str:
     convo = "\n".join(
         f"{m['role'].upper()}: {m['content']}" for m in history[-6:]
     )
     prompt = FOLLOWUP_PROMPT.format(convo=convo, question=question)
-    return gemini_generate(prompt).strip()
+    return gemini_generate(prompt, llm=llm).strip()
 
 
 # ---------------------------------------------------------------------------
 # Full pipeline with graceful degradation + per-stage timing
 # ---------------------------------------------------------------------------
-def ask(question: str, history: list | None = None, verbose: bool = True) -> dict:
+def ask(question: str, history: list | None = None, verbose: bool = True,
+        llm=None, conn_factory=None) -> dict:
     """Run the full pipeline. Returns answer + timings; never raises.
 
     history: optional list of prior {"role", "content"} turns for multi-turn
@@ -102,7 +103,7 @@ def ask(question: str, history: list | None = None, verbose: bool = True) -> dic
     if history:
         try:
             t = time.perf_counter()
-            question = resolve_followup(question, history)
+            question = resolve_followup(question, history, llm=llm)
             timings["context"] = round(time.perf_counter() - t, 2)
         except Exception:
             pass  # best effort; fall back to the raw question (e.g. rate limit)
@@ -120,7 +121,7 @@ def ask(question: str, history: list | None = None, verbose: bool = True) -> dic
     # --- guardrail + text-to-SQL (single Gemini call) ---
     try:
         t = time.perf_counter()
-        sql = generate_sql(question)
+        sql = generate_sql(question, llm=llm, conn_factory=conn_factory)
         timings["route+sql"] = round(time.perf_counter() - t, 2)
     except Exception as e:
         if is_rate_limit(e):
@@ -138,7 +139,8 @@ def ask(question: str, history: list | None = None, verbose: bool = True) -> dic
     # --- execute with self-heal retry ---
     try:
         t = time.perf_counter()
-        res = run_query_with_retry(question, initial_sql=sql, max_attempts=2)
+        res = run_query_with_retry(question, initial_sql=sql, max_attempts=2, llm=llm,
+                                    conn_factory=conn_factory)
         timings["query"] = round(time.perf_counter() - t, 2)
     except Exception as e:
         if is_rate_limit(e):
@@ -161,7 +163,7 @@ def ask(question: str, history: list | None = None, verbose: bool = True) -> dic
     # --- answer synthesis ---
     try:
         t = time.perf_counter()
-        answer = synthesize_answer(question, sql, cols, rows)
+        answer = synthesize_answer(question, sql, cols, rows, llm=llm)
         timings["answer"] = round(time.perf_counter() - t, 2)
     except Exception as e:
         if is_rate_limit(e):

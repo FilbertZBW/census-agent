@@ -14,6 +14,7 @@ import os
 import unittest
 
 from text_to_sql import data_table_for, _clean_sql, is_rate_limit
+from census_agent import ask
 
 LIVE = os.environ.get("RUN_LIVE_TESTS", "").strip() == "1"
 
@@ -74,6 +75,38 @@ class IntegrationTests(unittest.TestCase):
     def test_response_time_under_60s(self):
         r = self.ask("How many housing units are there in Florida?", verbose=False)
         self.assertLess(r["timings"]["total"], 60)
+
+
+# ---------------------------------------------------------------------------
+# Fake-based tests (no network) -- proof that the llm/conn_factory seams work.
+# Fixtures (fake_llm, fake_conn_factory, reset_module_caches) live in conftest.py.
+# ---------------------------------------------------------------------------
+def test_rate_limited_no_network(fake_llm):
+    fake_llm.responses = [Exception("429 RESOURCE_EXHAUSTED")]
+    result = ask("What is the population of California?", llm=fake_llm, verbose=False)
+    assert result["status"] == "rate_limited"
+
+
+def test_full_happy_path_no_network(fake_llm, fake_conn_factory):
+    fake_llm.responses = [
+        "B01003",
+        'SELECT SUM("B01001e1") FROM ...',
+        "California's total population is 39,283,497.",
+    ]
+    fake_conn_factory.responses = [
+        (["TABLE_NUMBER", "TABLE_TITLE", "TABLE_UNIVERSE"],
+         [("B01003", "Total Population", "Total population")]),
+        (["TABLE_ID", "FIELD_LEVEL_3", "FIELD_LEVEL_4", "FIELD_LEVEL_5",
+          "FIELD_LEVEL_6", "FIELD_LEVEL_7", "FIELD_LEVEL_8"],
+         [("B01001e1", "Total", "", "", "", "", "")]),
+        (["POPULATION"], [(39283497,)]),
+    ]
+    result = ask(
+        "What is the total population of California?",
+        llm=fake_llm, conn_factory=fake_conn_factory, verbose=False,
+    )
+    assert result["status"] == "ok"
+    assert result["rows"] == [(39283497,)]
 
 
 if __name__ == "__main__":

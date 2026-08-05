@@ -45,23 +45,43 @@ def is_rate_limit(e: Exception) -> bool:
     return "RESOURCE_EXHAUSTED" in s or "429" in s
 
 
-def gemini_generate(prompt: str, max_retries: int = 2) -> str:
-    """One Gemini call with thinking disabled + transient-error retry.
-    Rate-limit (429) errors are raised immediately so callers can report them;
-    other transient errors (5xx, deadline, connection blips) are retried."""
-    last = None
-    for attempt in range(max_retries + 1):
-        try:
-            resp = client.models.generate_content(
-                model=MODEL, contents=prompt, config=GEN_CONFIG
-            )
-            return resp.text
-        except Exception as e:
-            last = e
-            if is_rate_limit(e) or attempt == max_retries:
-                raise
-            time.sleep(1.5 * (attempt + 1))  # brief backoff before retry
-    raise last  # pragma: no cover
+class GeminiLLM:
+    """Wraps the real Gemini client, including transient-error retry/backoff.
+
+    This is the seam that tests swap out: gemini_generate() only requires an
+    object with a `.generate(prompt) -> str` method, so a FakeLLM with the
+    same method can stand in for this class with zero network calls."""
+
+    def __init__(self, client, model, config, max_retries: int = 2):
+        self._client = client
+        self._model = model
+        self._config = config
+        self._max_retries = max_retries
+
+    def generate(self, prompt: str) -> str:
+        last = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                resp = self._client.models.generate_content(
+                    model=self._model, contents=prompt, config=self._config
+                )
+                return resp.text
+            except Exception as e:
+                last = e
+                if is_rate_limit(e) or attempt == self._max_retries:
+                    raise
+                time.sleep(1.5 * (attempt + 1))  # brief backoff before retry
+        raise last  # pragma: no cover
+
+
+_default_llm = GeminiLLM(client, MODEL, GEN_CONFIG)
+
+
+def gemini_generate(prompt: str, llm=None) -> str:
+    """One Gemini call. Defaults to the real client (_default_llm); pass
+    llm=<some FakeLLM> to run the same code path with zero network calls,
+    e.g. in tests."""
+    return (llm or _default_llm).generate(prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -81,24 +101,25 @@ _FIELDS_CACHE = {}       # tuple(table_numbers) -> "code | label" text
 _TABLE_CACHE = {}        # question -> selected table_numbers (reused on retry)
 
 
-def get_table_catalog():
+def get_table_catalog(conn_factory=None):
     """Distinct table catalog from the metadata table (fetched once, cached)."""
     global _CATALOG
     if _CATALOG is None:
         _, rows = run_query(
             'SELECT DISTINCT "TABLE_NUMBER", "TABLE_TITLE", "TABLE_UNIVERSE" '
-            f'FROM {DESC} ORDER BY "TABLE_NUMBER"'
+            f'FROM {DESC} ORDER BY "TABLE_NUMBER"',
+            conn_factory=conn_factory,
         )
         _CATALOG = [(str(a), str(b), str(c)) for a, b, c in rows]
     return _CATALOG
 
 
-def _catalog_text():
-    return "\n".join(f"{n} | {t} | {u}" for n, t, u in get_table_catalog())
+def _catalog_text(conn_factory=None):
+    return "\n".join(f"{n} | {t} | {u}" for n, t, u in get_table_catalog(conn_factory))
 
 
-def _valid_table_numbers():
-    return {n for n, _, _ in get_table_catalog()}
+def _valid_table_numbers(conn_factory=None):
+    return {n for n, _, _ in get_table_catalog(conn_factory)}
 
 
 def data_table_for(table_number: str) -> str:
@@ -129,14 +150,15 @@ Question: {question}
 Answer:"""
 
 
-def select_tables(question: str):
+def select_tables(question: str, llm=None, conn_factory=None):
     """Stage 1: returns OFF_TOPIC or a list of validated TABLE_NUMBERs."""
     resp = gemini_generate(
-        SELECT_TABLES_PROMPT.format(catalog=_catalog_text(), question=question)
+        SELECT_TABLES_PROMPT.format(catalog=_catalog_text(conn_factory), question=question),
+        llm=llm,
     ).strip()
     if "OFF_TOPIC" in resp.upper():
         return OFF_TOPIC
-    valid = _valid_table_numbers()
+    valid = _valid_table_numbers(conn_factory)
     picked = []
     for tok in re.findall(r"[A-Za-z]\d{2}\w*", resp):
         tok = tok.upper()
@@ -145,7 +167,7 @@ def select_tables(question: str):
     return picked or OFF_TOPIC
 
 
-def get_table_fields(table_numbers) -> str:
+def get_table_fields(table_numbers, conn_factory=None) -> str:
     """Real estimate field codes + human labels for the chosen table(s)."""
     key = tuple(table_numbers)
     if key in _FIELDS_CACHE:
@@ -155,7 +177,8 @@ def get_table_fields(table_numbers) -> str:
         'SELECT "TABLE_ID", "FIELD_LEVEL_3", "FIELD_LEVEL_4", "FIELD_LEVEL_5", '
         '"FIELD_LEVEL_6", "FIELD_LEVEL_7", "FIELD_LEVEL_8" '
         f'FROM {DESC} WHERE "TABLE_NUMBER" IN ({in_list}) '
-        "AND \"FIELD_LEVEL_1\" = 'Estimate' ORDER BY \"TABLE_ID\""
+        "AND \"FIELD_LEVEL_1\" = 'Estimate' ORDER BY \"TABLE_ID\"",
+        conn_factory=conn_factory,
     )
     lines = []
     for r in rows:
@@ -232,7 +255,7 @@ def _clean_sql(text: str) -> str:
     return text
 
 
-def generate_sql_grounded(question, table_numbers, fields, error_feedback=None):
+def generate_sql_grounded(question, table_numbers, fields, error_feedback=None, llm=None):
     data_tables = "\n".join(sorted(
         {f'US_OPEN_CENSUS.PUBLIC."{data_table_for(t)}"' for t in table_numbers}
     ))
@@ -247,28 +270,29 @@ def generate_sql_grounded(question, table_numbers, fields, error_feedback=None):
         geo_rules=GEO_RULES, data_tables=data_tables, fields=fields,
         question=question, feedback=feedback,
     )
-    return _clean_sql(gemini_generate(prompt))
+    return _clean_sql(gemini_generate(prompt, llm=llm))
 
 
-def generate_sql(question: str, error_feedback: dict | None = None) -> str:
+def generate_sql(question: str, error_feedback: dict | None = None, llm=None,
+                  conn_factory=None) -> str:
     """Full dynamic flow: returns 'OFF_TOPIC' or a Snowflake SELECT string.
     Stage 1 picks real tables (and guards off-topic); Stage 2 writes SQL using
     those tables' real field codes. On a retry (error_feedback set) the table
     selection is reused and only the SQL is regenerated."""
     sel = _TABLE_CACHE.get(question)
     if sel is None:
-        sel = select_tables(question)
+        sel = select_tables(question, llm=llm, conn_factory=conn_factory)
         _TABLE_CACHE[question] = sel
     if sel == OFF_TOPIC:
         return OFF_TOPIC
-    fields = get_table_fields(sel)
+    fields = get_table_fields(sel, conn_factory=conn_factory)
     if not fields:
         raise RuntimeError(f"No fields found for selected tables {sel}")
-    return generate_sql_grounded(question, sel, fields, error_feedback)
+    return generate_sql_grounded(question, sel, fields, error_feedback, llm=llm)
 
 
-def run_query(sql: str):
-    conn = snowflake.connector.connect(
+def _real_conn_factory():
+    return snowflake.connector.connect(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
         password=os.environ["SNOWFLAKE_PASSWORD"],
@@ -276,6 +300,10 @@ def run_query(sql: str):
         database="US_OPEN_CENSUS",
         schema="PUBLIC",
     )
+
+
+def run_query(sql: str, conn_factory=None):
+    conn = (conn_factory or _real_conn_factory)()
     try:
         cur = conn.cursor()
         cur.execute(sql)
@@ -287,21 +315,23 @@ def run_query(sql: str):
 
 
 def run_query_with_retry(question: str, initial_sql: str | None = None,
-                         max_attempts: int = 2) -> dict:
+                         max_attempts: int = 2, llm=None, conn_factory=None) -> dict:
     """Self-healing text-to-SQL. Uses initial_sql for the first attempt (so we
     don't waste a generation call), then feeds any Snowflake error back to the
     model to correct it. Returns {sql, cols, rows, attempts}; raises if all
     attempts fail."""
-    sql = initial_sql if initial_sql is not None else generate_sql(question)
+    sql = initial_sql if initial_sql is not None else generate_sql(
+        question, llm=llm, conn_factory=conn_factory)
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
-            cols, rows = run_query(sql)
+            cols, rows = run_query(sql, conn_factory=conn_factory)
             return {"sql": sql, "cols": cols, "rows": rows, "attempts": attempt}
         except Exception as e:
             last_error = str(e)
             if attempt < max_attempts:
-                sql = generate_sql(question, {"sql": sql, "error": last_error})
+                sql = generate_sql(question, {"sql": sql, "error": last_error},
+                                    llm=llm, conn_factory=conn_factory)
     raise RuntimeError(
         f"All {max_attempts} attempts failed. Last error: {last_error}\n"
         f"Last SQL: {sql}"

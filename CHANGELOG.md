@@ -1,0 +1,11 @@
+# Changelog
+
+Factual, one-line-per-change log. No narrative, no reasoning — see
+HANDOVER.md and REFLECTION.md for that.
+
+## 2026-08-05
+
+- Made gemini_generate() injectable: extracted retry/backoff into new GeminiLLM class (text_to_sql.py), gemini_generate(prompt, llm=None) now delegates to (llm or _default_llm).generate(prompt). Verified: 3 unit tests green (test_clean_sql_strips_markdown_fences, test_data_table_for_maps_prefix, test_is_rate_limit_detects_429), 6 live-integration tests skipped (RUN_LIVE_TESTS unset).
+- Threaded `llm=None` through select_tables, generate_sql_grounded, generate_sql, run_query_with_retry (text_to_sql.py) and synthesize_answer, resolve_followup, ask (census_agent.py); each passes llm=llm into its gemini_generate/downstream call. Verified: 3 unit tests green (test_clean_sql_strips_markdown_fences, test_data_table_for_maps_prefix, test_is_rate_limit_detects_429), 6 live-integration tests skipped (RUN_LIVE_TESTS unset).
+- Added injectable conn_factory seam: extracted Snowflake connect() into _real_conn_factory() (text_to_sql.py); threaded conn_factory=None through run_query, get_table_catalog, _catalog_text, _valid_table_numbers, get_table_fields, select_tables, generate_sql, run_query_with_retry, and census_agent.ask(). generate_sql_grounded, resolve_followup, synthesize_answer left untouched (no DB access). Verified: 3 unit tests green (test_clean_sql_strips_markdown_fences, test_data_table_for_maps_prefix, test_is_rate_limit_detects_429), 6 live-integration tests skipped (RUN_LIVE_TESTS unset).
+- Added conftest.py (FakeLLM, FakeCursor/FakeConn, QueuedConnFactory, fake_llm/fake_conn_factory fixtures, autouse reset_module_caches) and two zero-network tests in test_agent.py (test_rate_limited_no_network, test_full_happy_path_no_network) exercising the llm/conn_factory seams end-to-end through census_agent.ask(). Installed pytest into ./venv (was missing, not in requirements.txt). Verified under real `pytest -v`: 5 passed (3 unit + 2 new fake-based), 6 live-integration skipped (RUN_LIVE_TESTS unset), 0 failed.
