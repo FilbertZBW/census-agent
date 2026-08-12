@@ -81,10 +81,20 @@ class IntegrationTests(unittest.TestCase):
 # Fake-based tests (no network) -- proof that the llm/conn_factory seams work.
 # Fixtures (fake_llm, fake_conn_factory, reset_module_caches) live in conftest.py.
 # ---------------------------------------------------------------------------
-def test_rate_limited_no_network(fake_llm):
+def test_rate_limited_no_network(fake_llm, fake_conn_factory):
+    # select_tables() fetches the catalog from Snowflake BEFORE calling the
+    # LLM, so this test needs a fake conn_factory too -- without it the
+    # catalog fetch hits the real network and the 429 is never reached.
     fake_llm.responses = [Exception("429 RESOURCE_EXHAUSTED")]
-    result = ask("What is the population of California?", llm=fake_llm, verbose=False)
+    fake_conn_factory.responses = [
+        (["TABLE_NUMBER", "TABLE_TITLE", "TABLE_UNIVERSE"],
+         [("B01003", "Total Population", "Total population")]),
+    ]
+    result = ask("What is the population of California?",
+                 llm=fake_llm, conn_factory=fake_conn_factory, verbose=False)
     assert result["status"] == "rate_limited"
+    assert len(fake_llm.prompts) == 1
+    assert fake_conn_factory.call_count == 1
 
 
 def test_full_happy_path_no_network(fake_llm, fake_conn_factory):
