@@ -1,6 +1,6 @@
 ## 0. How to work with me
 
-- Reply in Chinese, keep technical terms in English. I'm on Windows, local path `C:\Users\zbwqd\census-agent`.
+- I'm on Windows, local path `C:\Users\zbwqd\census-agent`.
 - Act as a working pair, not a code generator. Small steps, each with a clear definition of done. Wait for me to paste the real output or the real error before moving on.
 - Don't invent what the data or the schema looks like. If a fact is checkable, tell me to write a probe script and check it.
 - **Never let me ship a quietly wrong number.** My worst failure mode is a well-formatted, believable, wrong answer — wrong field, wrong aggregation, wrong geography. Flag census semantics I may be getting wrong even when the SQL is valid.
