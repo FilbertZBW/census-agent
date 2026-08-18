@@ -13,3 +13,11 @@ HANDOVER.md and REFLECTION.md for that.
 ## 2026-08-12
 
 - Fixed test_rate_limited_no_network (test_agent.py): it was hitting real Snowflake because select_tables() fetches the catalog before calling the LLM, and the test only injected fake_llm, not fake_conn_factory -- so a live-Snowflake outage produced status 'sql_gen_error' with FakeLLM called 0 times instead of 'rate_limited'. Fix: inject fake_conn_factory with a scripted catalog response, and assert len(fake_llm.prompts) == 1 and fake_conn_factory.call_count == 1 so the bug fails loudly if it recurs. Verified: `python -m pytest test_agent.py -v` -> 5 passed, 6 skipped (RUN_LIVE_TESTS unset), 0.02s, no network I/O.
+
+## 2026-08-15
+
+- Comment-only pass on text_to_sql.py and census_agent.py: added a docstring to every function lacking one (_build_config, GeminiLLM.generate, _catalog_text, _valid_table_numbers, _clean_sql, generate_sql_grounded, _real_conn_factory, run_query, synthesize_answer, resolve_followup), block comments on previously-unexplained code (select_tables' token-validation loop, get_table_fields' label-join loop, run_query_with_retry's retry loop, both __main__ smoke-test blocks), and a per-branch comment on each of the 8 `return` statements in census_agent.ask() stating the exact condition that produces it. No logic changed. Verified: `pytest -m "not integration"` -> 5 passed, 6 skipped (RUN_LIVE_TESTS unset), 198s.
+
+## 2026-08-18
+
+- REFLECTION.md, "Edge cases & failure modes" section, at user's explicit request (normally frozen): reordered to lead with the silent rows[:50] truncation / missing SQL LIMIT bug and the lack of a code-level SQL safety check (previously undocumented there), merged the two clarification-loop bullets (ambiguous geographies + underspecified questions) into one, dropped the streaming bullet as least significant, kept cost & concurrency. No code changed; doc-only.

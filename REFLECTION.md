@@ -93,11 +93,11 @@ that every generated statement is read-only.
 
 ## Edge cases & failure modes I did not fully address
 
-- *Ambiguous / sub-county geographies:* the data is keyed to states, counties, and block groups, so a city or ambiguous place like "Springfield" cannot be resolved cleanly; the agent currently falls back to the guardrail / empty-result path rather than asking a clarifying question.
-- *Underspecified or conflicting questions:* there is no explicit clarification turn yet -- the agent makes a best-effort interpretation instead of asking the user to disambiguate.
+- *Silent result truncation (biggest gap):* generated SQL carries no `LIMIT`, and the answer layer silently truncates to the first 50 rows before synthesis. A question like "list all 254 counties in Texas" hits this today with no error and no warning that the answer is incomplete -- the kind of quietly-wrong-answer failure mode I care most about avoiding. Fix: push `LIMIT` into the generated SQL, return a truncation flag, and have the answer layer say so explicitly.
+- *No code-level SQL safety check:* the "SELECT only" rule lives in the prompt, not in code -- nothing between generation and execution actually enforces it. What protects the system today is the read-only Snowflake service-account role, not the application. This needs a code-level allowlist (single `SELECT`, approved tables only) rather than a blocklist, since blocklists miss things like `SELECT ... INTO`, comment-hidden statements, or chained statements.
+- *Ambiguous / sub-county geographies and underspecified questions:* the data is keyed to states, counties, and block groups, so a city or ambiguous place like "Springfield" cannot be resolved cleanly, and there is no explicit clarification turn -- the agent falls back to a best-effort interpretation (or the guardrail / empty-result path) instead of asking the user to disambiguate.
 - *Trend / multi-year questions:* only the 2019 ACS snapshot is wired in, so "change over time" questions are out of scope.
 - *Cost & concurrency:* each turn makes 2-3 Gemini calls and opens a fresh Snowflake connection; I did not add connection pooling, caching of repeated questions, or per-user rate limiting.
-- *Streaming:* responses are fast enough that I show a spinner rather than token streaming; under a slow model this would still block (up to the 60s budget) with no incremental output.
 - *Answer verification:* the synthesis step is instructed to use only the SQL result, but I do not programmatically verify the numbers in the prose against the returned rows.
 
 ## What I'd do next
